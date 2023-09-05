@@ -1,0 +1,192 @@
+package com.clockTower.online;
+
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.nio.ByteBuffer;
+import java.nio.channels.AsynchronousServerSocketChannel;
+import java.nio.channels.AsynchronousSocketChannel;
+import java.nio.channels.CompletionHandler;
+import java.util.LinkedList;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+
+import com.clockTower.Utility.Utility;
+import com.clockTower.fileUtilities.ADOScript;
+import com.clockTower.main.ExecuteADOFunction;
+import com.clockTower.main.Game;
+import com.clockTower.main.loader;
+
+public class ServerOld
+{
+	public int port;
+	public boolean running = false;
+	AsynchronousServerSocketChannel listener = null;
+	
+	public static LinkedList<ClientInfo> clients = new LinkedList<ClientInfo>();
+	
+	public ClientInfo myClientInfo; //this is what the clients will draw from when they need to teat the server as just another player
+
+	public LinkedList<AsynchronousSocketChannel> channels = new LinkedList<AsynchronousSocketChannel>();
+	
+	public byte[] dummy = new byte[1];
+	
+	boolean messagePending;
+	byte[] pendingMessage;
+	
+	
+    public void stopServer()
+    {
+    	if (listener != null) {
+	    	try {
+				listener.close();
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
+    	}
+        
+        running = false;
+    }
+    
+    public ServerOld(int _port)
+    {
+    	myClientInfo = new ClientInfo(Utility.RandomInRange(-Integer.MIN_VALUE, Integer.MAX_VALUE-1), "Server_user");
+    	myClientInfo.myPlayer = loader.player;
+    	
+        try
+        {
+            // Create an AsynchronousServerSocketChannel that will listen on the chosen port
+            listener =
+                    AsynchronousServerSocketChannel.open().bind(new InetSocketAddress(_port));
+            port = _port;
+            System.out.println("Starting server on port "+port);
+
+            Game.isServer = true;
+            running = true;
+            
+            // Listen for a new request
+            listener.accept( null, new CompletionHandler<AsynchronousSocketChannel,Void>() {
+
+                @Override
+                public void completed(AsynchronousSocketChannel ch, Void att)
+                {
+                	if (!channels.contains(ch)){
+                		channels.add(ch);
+                		System.out.println("previously unseen channel added");
+            		}
+                	
+                	
+                    // Accept the next connection
+                    listener.accept( null, this );
+
+                    // Greet the client
+                    //ch.write( ByteBuffer.wrap( "Greetings from the server to the client".getBytes() ) );
+
+                    // Allocate a byte buffer (8K) to read from the client
+                    ByteBuffer byteBuffer = ByteBuffer.allocate( 8192 );
+                    try
+                    {
+                        // Read the first line
+                        int bytesRead = ch.read( byteBuffer ).get( 20, TimeUnit.SECONDS );
+                        	
+                        boolean running = true;
+                        while( bytesRead != -1 && running )
+                        {
+                           // System.out.println( "bytes read: " + bytesRead );
+
+                            // Make sure that we have data to read
+                            if( byteBuffer.position() > 2 )
+                            {
+                                // Make the buffer ready to read
+                                byteBuffer.flip();
+
+                                // Convert the buffer into a line
+                                byte[] lineBytes = new byte[ bytesRead ];
+                                byteBuffer.get( lineBytes, 0, bytesRead );
+
+                                //We have just read the bytes received from a client, parse it
+                                
+                                if (lineBytes[1] == (byte)0xFF) {
+                                	//treat as ADO command
+                                	ExecuteADOFunction executeADO = new ExecuteADOFunction(new ADOScript(lineBytes), 0, 0);
+                            		executeADO.start();	//Start executing the ADO instructions
+                                }
+                                
+                                //String line = new String( lineBytes );
+
+                                // Debug
+                                //System.out.println( "Message: " + line );
+
+                                // Send a message back if needed
+                                
+                                if (messagePending) {
+                                	messagePending = false;
+                                	for (int i = 0; i < channels.size(); i++) {
+                            			ByteBuffer buffer = ByteBuffer.wrap(pendingMessage);
+                            			channels.get(i).write(buffer);
+                            		}
+                                } else {
+                                	ch.write( ByteBuffer.wrap(dummy));
+                                }
+                                
+                                
+                                // Make the buffer ready to write
+                                byteBuffer.clear();
+
+                                // Read the next line
+                                bytesRead = ch.read( byteBuffer ).get( 20, TimeUnit.SECONDS );
+                            }
+                            else
+                            {
+                                // An empty line signifies the end of the conversation in our protocol
+                                running = false;
+                            }
+                        }
+                    }
+                    catch (InterruptedException e)
+                    {
+                        e.printStackTrace();
+                    }
+                    catch (ExecutionException e)
+                    {
+                        e.printStackTrace();
+                    }
+                    catch (TimeoutException e)
+                    {
+                        // The user exceeded the 20 second timeout, so close the connection
+                        ch.write( ByteBuffer.wrap( "Good Bye\n".getBytes() ) );
+                        System.out.println( "Connection timed out, closing connection" );
+                    }
+
+                    System.out.println( "End of conversation" );
+                    try
+                    {
+                        // Close the connection if we need to
+                        if( ch.isOpen() )
+                        {
+                            ch.close();
+                        }
+                    }
+                    catch (IOException e1)
+                    {
+                        e1.printStackTrace();
+                    }
+                }
+
+                @Override
+                public void failed(Throwable exc, Void att) {
+                    ///...
+                }
+            });
+        }
+        catch (IOException e)
+        {
+            e.printStackTrace();
+        }
+    }
+
+	public void SendMessageToClients(byte[] msg) {
+		pendingMessage = msg;
+		messagePending = true;
+	}
+}

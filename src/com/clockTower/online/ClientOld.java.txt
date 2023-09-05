@@ -1,0 +1,138 @@
+package com.clockTower.online;
+
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.nio.ByteBuffer;
+import java.nio.channels.AsynchronousSocketChannel;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
+
+import com.clockTower.Utility.Utility;
+import com.clockTower.fileUtilities.ADOScript;
+import com.clockTower.main.ExecuteADOFunction;
+import com.clockTower.main.Game;
+import com.clockTower.main.loader;
+
+public class ClientOld
+{
+	public ClientInfo myClientInfo;
+	
+	AsynchronousSocketChannel client;
+	String server = "localhost";
+	int serverPort;
+	byte[] dummy = new byte[3];
+	
+	public boolean active;
+	
+	 public ClientOld(String _server,int _serverPort,String _name) {
+		
+		 Game.client = this;
+		 
+		 server = _server;
+		 serverPort = _serverPort;
+		 
+		 try {
+			client = AsynchronousSocketChannel.open();
+		} catch (IOException e1) {
+			e1.printStackTrace();
+		}
+		 InetSocketAddress hostAddress = new InetSocketAddress(server, serverPort);
+		 Future<Void> future = client.connect(hostAddress);
+		 System.out.println("Trying to connect client to server \'"+server+"\' on port "+serverPort);
+		 
+		 
+		 try {
+			future.get();
+		} catch (InterruptedException | ExecutionException e) {
+			e.printStackTrace();
+		}
+		 
+		 myClientInfo = new ClientInfo(Utility.RandomInRange(-Integer.MIN_VALUE, Integer.MAX_VALUE-1),_name);
+		 myClientInfo.myPlayer = loader.player;
+		 
+		 active = true;
+		 //System.out.println(sendMessage("Hello, this is a message from a client who has connected to the server"));
+		 sendBytes(OnlineMessages.RegisterMeOnServer(myClientInfo));
+		 sendBytes(OnlineMessages.UpdateAvatarOnServer(myClientInfo));
+		 sendBytes(OnlineMessages.SendChatMessage(myClientInfo,"Hello, this is a message from a client who \nhas connected to the server"));
+	 }
+	 
+	 public byte[] sendBytes(byte[] byteMsg) {
+		    ByteBuffer buffer = ByteBuffer.wrap(byteMsg);
+		    Future<Integer> writeResult = client.write(buffer);
+
+		    // do some computation
+
+		    try {
+				writeResult.get();
+			} catch (InterruptedException | ExecutionException e) {
+				e.printStackTrace();
+			}
+		    buffer.flip();
+		    
+		    buffer = ByteBuffer.allocate(8192);
+		    Future<Integer> readResult = client.read(buffer);
+		    
+		    int len = 0;
+		    
+		    // do some computation
+
+		    try {
+				len = readResult.get();
+			} catch (InterruptedException | ExecutionException e) {
+				e.printStackTrace();
+			}
+		    
+		    byte[] src = buffer.array();
+		    byte[] echo = new byte[len];
+		    
+		    System.arraycopy(src, 0, echo, 0, len);
+		    
+		    if (echo.length > 2 && echo[1] == (byte)0xFF) {
+         	//treat as ADO command
+		    	//System.out.println("received command over the network: "+echo[0]);
+         	ExecuteADOFunction executeADO = new ExecuteADOFunction(new ADOScript(echo), 0, 0);
+     		executeADO.start();	//Start executing the ADO instructions
+		    }
+		    
+		    buffer.clear();
+		    return echo;
+		}
+	 
+	 public String sendMessage(String message) {
+		    byte[] byteMsg = new String(message).getBytes();
+		    ByteBuffer buffer = ByteBuffer.wrap(byteMsg);
+		    Future<Integer> writeResult = client.write(buffer);
+
+		    // do some computation
+
+		    try {
+				writeResult.get();
+			} catch (InterruptedException | ExecutionException e) {
+				e.printStackTrace();
+			}
+		    buffer.flip();
+		    Future<Integer> readResult = client.read(buffer);
+		    
+		    int res = 0;
+		    
+		    // do some computation
+
+		    try {
+				res = readResult.get();
+			} catch (InterruptedException | ExecutionException e) {
+				e.printStackTrace();
+			}
+		    
+		    String echo = new String(buffer.array(),0,res).trim();
+		    buffer.clear();
+		    return echo;
+		}
+	 
+	 
+	public void heartbeat() {
+			if(active) {
+				sendBytes(dummy);
+			}
+	}
+}
